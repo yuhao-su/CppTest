@@ -6,7 +6,7 @@
 #include <sys/time.h>
 #include <omp.h>
 
-#define WRITE_SIZE 256 * 1024 * 1024
+#define WRITE_SIZE 64 * 1024 * 1024
 #define READ_SIZE WRITE_SIZE
 #define THREAD_NUM 8
 
@@ -19,7 +19,7 @@ long long get_time()
 
 char* init_buf(int size)
 {
-    char *buf = new char[size];
+    char *buf = (char *)aligned_alloc(4096, size * sizeof(char));
     for (int i = 0; i < WRITE_SIZE; i++)
         buf[i] = 'a';
     return buf;
@@ -76,14 +76,14 @@ int test_read_block()
     io_block_time = get_time();
 
     if(pread(input_fd, content, READ_SIZE, 0) == -1) {
-        printf("pwrite_error!");
+        printf("pread_error!");
     }
     close(input_fd);
 #pragma omp barrier
 #pragma omp single
 {
     io_block_time = get_time() - io_block_time;
-    printf("pwrite block time:  %lld\n", io_block_time);
+    printf("pread block time:   %lld\n", io_block_time);
 }
 }
     
@@ -115,7 +115,7 @@ struct io_event   e[THREAD_NUM];
     char*        filename = new char[256]; 
     sprintf(filename, "./output/output_aio_%d.txt", nthread);
     // 2. try to open a file.
-    if((output_fd=open(filename, O_CREAT|O_WRONLY, 0644)) < 0) {
+    if((output_fd=open(filename, O_CREAT|O_WRONLY, 0777)) < 0) {
         perror("open error");
         io_destroy(ctx);
     }
@@ -131,6 +131,7 @@ struct io_event   e[THREAD_NUM];
         io_destroy(ctx);
         printf("io_submit error\n");
     }
+
 
 }
     io_submit_time = get_time() - io_submit_time;
@@ -173,7 +174,7 @@ struct io_event   e[THREAD_NUM];
     char*        filename = new char[256]; 
     sprintf(filename, "./output/output_aio_%d.txt", nthread);
     // 2. try to open a file.
-    if((input_fd=open(filename, O_RDONLY, 0644)) < 0) {
+    if((input_fd=open(filename, O_RDONLY|O_DIRECT, 0644)) < 0) {
         perror("open error");
         io_destroy(ctx);
     }
@@ -185,10 +186,13 @@ struct io_event   e[THREAD_NUM];
 #pragma omp single
     io_submit_time = get_time();
 
+#pragma omp critical
+{
     if(io_submit(ctx, 1, &p) < 0){
         io_destroy(ctx);
         printf("io_submit error\n");
     }
+}
 
 }
     io_submit_time = get_time() - io_submit_time;
@@ -210,10 +214,11 @@ struct io_event   e[THREAD_NUM];
 int main(void)
 {
     char *content = init_buf(WRITE_SIZE);
-    // test_write_aio(content);
-    // test_write_block(content);
-    test_read_aio();
-    test_read_block();
+    test_write_aio(content);
+    test_write_block(content);
+    printf("\n");
+    // test_read_aio();
+    // test_read_block();
     
     return 0;
 }
