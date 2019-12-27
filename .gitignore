@@ -51,3 +51,7 @@ _deps
 bin/*
 !bin/placeholder.txt
 test
+aio
+
+#datasets
+/output
