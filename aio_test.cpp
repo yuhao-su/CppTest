@@ -6,7 +6,7 @@
 #include <sys/time.h>
 #include <omp.h>
 
-#define WRITE_SIZE 64 * 1024 * 1024
+#define WRITE_SIZE 32 * 1024 * 1024
 #define READ_SIZE WRITE_SIZE
 #define THREAD_NUM 8
 
@@ -27,6 +27,7 @@ char* init_buf(int size)
 
 int test_write_block(char* content)
 {
+    printf("Write block\n");
     long long io_block_time;
 #pragma omp parallel num_threads(THREAD_NUM)
 {
@@ -34,7 +35,7 @@ int test_write_block(char* content)
     int   nthread  = omp_get_thread_num();
     char* filename = new char[256];
     sprintf(filename, "./output/output_block_%d.txt", nthread);
-    if((output_fd=open(filename, O_CREAT|O_WRONLY, 0644)) < 0) {
+    if((output_fd=open(filename, O_CREAT|O_WRONLY|O_DIRECT, 0644)) < 0) {
         perror("open error");
     }
 
@@ -52,13 +53,13 @@ int test_write_block(char* content)
     io_block_time = get_time() - io_block_time;
     printf("pwrite block time:  %lld\n", io_block_time);
 }
-}
-    
+}   
     return 0;
 }
 
 int test_read_block()
 {
+    printf("Read block\n");
     long long io_block_time;
 #pragma omp parallel num_threads(THREAD_NUM)
 {
@@ -91,10 +92,80 @@ int test_read_block()
 }
 
 
+int test_write_aio2(char * content)
+{
+    
+    // struct timespec   timeout;
+    printf("Write aio2\n");
+    
+    long long         io_submit_time, io_poll_time;
+
+#pragma omp parallel num_threads(THREAD_NUM) 
+{
+    // 1. init the io context.
+    io_context_t      ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    if(io_setup(10, &ctx)){
+        printf("io_setup error\n");
+    }
+    int               event_num;
+    struct       io_event   e;
+    int          nthread = omp_get_thread_num();
+    int          output_fd;
+    struct iocb  io, *p=&io;
+    char*        filename = new char[256]; 
+    sprintf(filename, "./output/output_aio2_%d.txt", nthread);
+    // 2. try to open a file.
+    if((output_fd=open(filename, O_CREAT|O_WRONLY|O_DIRECT, 0777)) < 0) {
+        perror("open error");
+        io_destroy(ctx);
+    }
+    // 3. prepare the data.
+    io_prep_pwrite(&io, output_fd, (void*)content, WRITE_SIZE, 0);
+
+    //io.data = content;   // set or not
+#pragma omp barrier
+#pragma omp single
+    io_submit_time = get_time();
+
+    if(io_submit(ctx, 1, &p) < 0){
+        io_destroy(ctx);
+        printf("io_submit error\n");
+    }
+#pragma omp barrier
+#pragma omp single
+    io_submit_time = get_time() - io_submit_time;
+    
+    // 4. wait IO finish.
+#pragma omp barrier
+#pragma omp single
+    io_poll_time = get_time();
+
+    if((event_num = io_getevents(ctx, 0, THREAD_NUM, &e, NULL))) {
+        printf("number of events: %d\n", event_num);
+    } else {
+        printf("io_getevent error");
+    }
+
+#pragma omp barrier
+#pragma omp single
+    io_poll_time = get_time() - io_poll_time;
+    
+    io_destroy(ctx);
+}
+
+
+    printf("io2 submit time:    %lld\n", io_submit_time);
+    printf("io2  poll  time:    %lld\n", io_poll_time);
+    
+    return 0;
+}
+
 
 int test_write_aio(char * content)
 {
-struct io_event   e[THREAD_NUM]; 
+    printf("Write aio\n");
+    struct io_event   e[THREAD_NUM]; 
     // struct timespec   timeout;
     io_context_t      ctx;
     int               event_num;
@@ -115,7 +186,7 @@ struct io_event   e[THREAD_NUM];
     char*        filename = new char[256]; 
     sprintf(filename, "./output/output_aio_%d.txt", nthread);
     // 2. try to open a file.
-    if((output_fd=open(filename, O_CREAT|O_WRONLY, 0777)) < 0) {
+    if((output_fd=open(filename, O_CREAT|O_WRONLY|O_DIRECT, 0777)) < 0) {
         perror("open error");
         io_destroy(ctx);
     }
@@ -141,6 +212,8 @@ struct io_event   e[THREAD_NUM];
     io_poll_time = get_time();
     if((event_num = io_getevents(ctx, 0, THREAD_NUM, e, NULL))) {
         printf("number of events: %d\n", event_num);
+    } else {
+        printf("io_getevent error");
     }
     io_poll_time = get_time() - io_poll_time;
 
@@ -152,7 +225,8 @@ struct io_event   e[THREAD_NUM];
 
 int test_read_aio()
 {
-struct io_event   e[THREAD_NUM]; 
+    printf("Read aio\n");
+    struct io_event   e[THREAD_NUM]; 
     // struct timespec   timeout;
     io_context_t      ctx;
     int               event_num;
@@ -215,10 +289,13 @@ int main(void)
 {
     char *content = init_buf(WRITE_SIZE);
     test_write_aio(content);
+    printf("\n");
     test_write_block(content);
     printf("\n");
-    // test_read_aio();
-    // test_read_block();
+    test_write_aio2(content);
+    printf("\n");
+    test_read_aio();
+    test_read_block();
     
     return 0;
 }
